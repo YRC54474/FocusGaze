@@ -1,0 +1,1115 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Focus Time — เกมเพ่งจุด</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Anuphan:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    color-scheme: dark;
+    /* Dusk-indigo palette. Amber = the thing you follow, magenta = the thing you ignore. */
+    --ink:      #10122A;
+    --ink-2:    #191C3D;
+    --line:     #2C315E;
+    --paper:    #E9E7F5;
+    --muted:    #9A9CC4;
+    --target:   #F2B33D;
+    --decoy:    #E0568C;
+    --good:     #6FE3B0;
+    --bad:      #FF7B72;
+    --font-ui:  "Anuphan", "Noto Sans Thai", system-ui, sans-serif;
+    --font-num: "IBM Plex Mono", ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%; overflow: hidden;
+    background: var(--ink); color: var(--paper); font-family: var(--font-ui);
+  }
+  button {
+    cursor: pointer; font-family: inherit; font-size: 15px; font-weight: 600;
+    border: 1px solid var(--line); border-radius: 10px; padding: 12px 24px;
+    background: var(--ink-2); color: var(--paper); transition: border-color 120ms, background 120ms;
+  }
+  button:hover { border-color: var(--target); }
+  button:focus-visible { outline: 2px solid var(--target); outline-offset: 2px; }
+  button.primary { background: var(--target); color: #221803; border-color: var(--target); }
+  button.primary:hover { background: #ffc65c; }
+  button:disabled { opacity: .5; cursor: default; }
+
+  /* ---------- screens ---------- */
+  .screen {
+    position: fixed; inset: 0; z-index: 20; display: none;
+    align-items: center; justify-content: center; padding: 24px;
+    background: rgba(16, 18, 42, .94);
+  }
+  .screen.active { display: flex; }
+  .card {
+    width: 100%; max-width: 560px; background: var(--ink-2);
+    border: 1px solid var(--line); border-radius: 18px; padding: 32px;
+  }
+  .eyebrow {
+    font-family: var(--font-num); font-size: 12px; letter-spacing: .18em;
+    text-transform: uppercase; color: var(--muted); margin: 0 0 10px;
+  }
+  h1 { font-size: 30px; font-weight: 700; margin: 0 0 14px; line-height: 1.2; }
+  h2 { font-size: 22px; font-weight: 600; margin: 0 0 12px; }
+  p  { font-size: 15px; line-height: 1.75; color: #C7C7E4; margin: 0 0 14px; }
+  .rules { margin: 0 0 22px; padding: 0; list-style: none; }
+  .rules li {
+    font-size: 14px; line-height: 1.7; color: #C7C7E4;
+    padding-left: 20px; position: relative; margin-bottom: 6px;
+  }
+  .rules li::before {
+    content: ""; position: absolute; left: 2px; top: 10px;
+    width: 7px; height: 7px; border-radius: 50%; background: var(--target);
+  }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .note { font-size: 13px; color: var(--muted); line-height: 1.6; }
+  .error { color: var(--bad); font-size: 13px; margin-top: 14px; white-space: pre-wrap; }
+
+  /* ---------- results table ---------- */
+  .grade {
+    font-family: var(--font-num); font-size: 68px; font-weight: 600; line-height: 1;
+    margin: 0 0 4px;
+  }
+  .stat-list { border-top: 1px solid var(--line); margin: 18px 0; }
+  .stat {
+    display: flex; justify-content: space-between; align-items: baseline; gap: 16px;
+    padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 14px;
+  }
+  .stat .k { color: var(--muted); }
+  .stat .v { font-family: var(--font-num); font-size: 15px; }
+  .stat.total .v { font-size: 20px; color: var(--target); }
+  .flag {
+    border: 1px solid var(--bad); border-radius: 10px; padding: 12px 14px;
+    font-size: 13px; line-height: 1.6; color: #FFC4C0; margin-bottom: 16px;
+  }
+
+  /* ---------- play field ---------- */
+  #field { position: fixed; inset: 0; z-index: 1; }
+  #zones {
+    position: fixed; inset: 0; z-index: 2; display: grid;
+    grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(2, 1fr);
+    pointer-events: none;
+  }
+  .cell { border: 1px solid rgba(255,255,255,.045); transition: background 100ms linear; }
+  .cell.lit { background: rgba(233,231,245,.05); border-color: rgba(233,231,245,.14); }
+
+  /* the capture field: you must look inside this, not just in the zone */
+  #field-ring {
+    position: fixed; z-index: 4; border-radius: 50%;
+    transform: translate(-50%, -50%); pointer-events: none;
+    border: 1px dashed rgba(233,231,245,.12);
+    transition: border-color 120ms linear, background 120ms linear;
+  }
+  #field-ring.state-on   { border-color: rgba(111,227,176,.55); background: rgba(111,227,176,.05); }
+  #field-ring.state-near { border-color: rgba(242,179,61,.40); }
+  #field-ring.state-off  { border-color: rgba(233,231,245,.10); }
+
+  /* the grace band, drawn so its shrinking is something you can see */
+  #grace-ring {
+    position: fixed; z-index: 3; border-radius: 50%;
+    transform: translate(-50%, -50%); pointer-events: none;
+    border: 1px solid rgba(233,231,245,.07);
+    transition: border-color 120ms linear;
+  }
+  #grace-ring.state-near { border-color: rgba(242,179,61,.28); }
+
+  /* the dot you follow */
+  #dot {
+    position: fixed; z-index: 6; width: 132px; height: 132px;
+    transform: translate(-50%, -50%); pointer-events: none;
+  }
+  #dot svg { width: 100%; height: 100%; display: block; }
+
+  /* decoys — every one of them is pink, whatever the shape.
+     Shape carries the variety; colour carries the rule. */
+  .decoy {
+    position: fixed; z-index: 5; pointer-events: none;
+    transform: translate(-50%, -50%);
+  }
+
+  /* circle: throbs in place */
+  .d-pulse {
+    width: 84px; height: 84px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(224,86,140,.85) 0%, rgba(224,86,140,.25) 55%, transparent 72%);
+    animation: nag .55s ease-in-out infinite alternate;
+  }
+  @keyframes nag { from { opacity: .45; transform: translate(-50%,-50%) scale(.82); }
+                   to   { opacity: 1;   transform: translate(-50%,-50%) scale(1.12); } }
+
+  /* square: hard on/off flicker, the loudest one */
+  .d-blink {
+    width: 66px; height: 66px; border-radius: 8px; background: var(--decoy);
+    animation: blink .26s steps(1, end) infinite;
+  }
+  @keyframes blink { 0%, 49% { opacity: .95; } 50%, 100% { opacity: .12; } }
+
+  /* triangle: slides across the screen */
+  .d-drift {
+    width: 84px; height: 76px; background: var(--decoy); opacity: .85;
+    clip-path: polygon(50% 0%, 100% 100%, 0% 100%);
+    animation: wobble 2.2s ease-in-out infinite alternate;
+  }
+  @keyframes wobble { from { transform: translate(-50%,-50%) rotate(-9deg); }
+                      to   { transform: translate(-50%,-50%) rotate(9deg); } }
+
+  /* swarm: diamonds orbiting a centre, drifts slowly */
+  .d-swarm { width: 128px; height: 128px; animation: orbit 2.8s linear infinite; }
+  .d-swarm i {
+    position: absolute; width: 24px; height: 24px; background: var(--decoy);
+    border-radius: 4px; transform: rotate(45deg); opacity: .9;
+  }
+  .d-swarm i:nth-child(1) { top: 0; left: 52px; }
+  .d-swarm i:nth-child(2) { bottom: 6px; left: 8px; }
+  .d-swarm i:nth-child(3) { bottom: 6px; right: 8px; }
+  @keyframes orbit { from { transform: translate(-50%,-50%) rotate(0deg); }
+                     to   { transform: translate(-50%,-50%) rotate(360deg); } }
+
+  /* impostor: same silhouette as the target, wrong colour */
+  .d-twin {
+    width: 104px; height: 104px; border-radius: 50%;
+    border: 7px solid var(--decoy);
+    animation: breathe 1.6s ease-in-out infinite alternate;
+  }
+  .d-twin i {
+    position: absolute; inset: 30px; border-radius: 50%; background: var(--decoy);
+  }
+  @keyframes breathe { from { transform: translate(-50%,-50%) scale(.94); opacity: .7; }
+                       to   { transform: translate(-50%,-50%) scale(1.04); opacity: 1; } }
+
+  /* where the model thinks you are looking */
+  #gaze {
+    position: fixed; z-index: 7; width: 18px; height: 18px; border-radius: 50%;
+    transform: translate(-50%, -50%); pointer-events: none; opacity: .8;
+    background: var(--paper); box-shadow: 0 0 12px rgba(233,231,245,.5);
+  }
+
+  /* ---------- hud ---------- */
+  #hud {
+    position: fixed; z-index: 8; top: 0; left: 0; right: 0;
+    display: flex; justify-content: space-between; align-items: flex-start;
+    padding: 16px 20px; pointer-events: none;
+  }
+  .hud-block { display: flex; gap: 26px; }
+  .metric .label {
+    font-family: var(--font-num); font-size: 10px; letter-spacing: .16em;
+    text-transform: uppercase; color: var(--muted); display: block; margin-bottom: 2px;
+  }
+  .metric .value { font-family: var(--font-num); font-size: 22px; font-weight: 600; }
+  #meter-wrap {
+    position: fixed; z-index: 8; bottom: 22px; left: 50%; transform: translateX(-50%);
+    width: min(460px, 70vw);
+  }
+  #meter-track {
+    height: 8px; border-radius: 99px; background: var(--ink-2);
+    border: 1px solid var(--line); overflow: hidden;
+  }
+  #meter-fill { height: 100%; width: 100%; background: var(--good); transition: background 200ms linear; }
+  #meter-label {
+    text-align: center; font-size: 12px; color: var(--muted); margin-top: 8px; min-height: 18px;
+  }
+  #banner {
+    position: fixed; z-index: 9; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    text-align: center; pointer-events: none; font-size: 20px; font-weight: 600;
+    text-shadow: 0 2px 18px var(--ink);
+  }
+  #banner .sub { font-size: 14px; color: var(--muted); font-weight: 400; margin-top: 8px; }
+  #cam {
+    position: fixed; z-index: 8; bottom: 18px; left: 18px; width: 148px;
+    border: 1px solid var(--line); border-radius: 10px; overflow: hidden; display: none;
+  }
+  #cam video { width: 100%; display: block; transform: scaleX(-1); }
+  .hidden { display: none !important; }
+
+  @media (max-width: 720px) {
+    #hud { flex-direction: column; gap: 12px; }
+    .hud-block { gap: 18px; }
+    h1 { font-size: 24px; }
+    .card { padding: 24px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .decoy, .d-swarm, .d-twin { animation: none !important; opacity: .85; }
+    * { transition-duration: 1ms !important; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ============ PLAY FIELD ============ -->
+<div id="zones"></div>
+
+<div id="grace-ring" class="hidden"></div>
+<div id="field-ring" class="hidden"></div>
+
+<div id="dot" class="hidden">
+  <svg viewBox="0 0 100 100" aria-hidden="true">
+    <circle cx="50" cy="50" r="46" fill="none" stroke="rgba(242,179,61,.18)" stroke-width="6"/>
+    <circle id="hold-ring" cx="50" cy="50" r="46" fill="none" stroke="#F2B33D" stroke-width="6"
+            stroke-linecap="round" stroke-dasharray="289" stroke-dashoffset="289"
+            transform="rotate(-90 50 50)"/>
+    <circle id="dot-core" cx="50" cy="50" r="17" fill="#F2B33D"/>
+    <circle cx="50" cy="50" r="6" fill="#221803"/>
+  </svg>
+</div>
+
+<div id="gaze" class="hidden"></div>
+
+<div id="hud" class="hidden">
+  <div class="hud-block">
+    <div class="metric"><span class="label">คะแนน</span><span class="value" id="m-score">0</span></div>
+    <div class="metric"><span class="label">เวลาโฟกัส</span><span class="value" id="m-time">0:00</span></div>
+    <div class="metric"><span class="label">แม่นยำ</span><span class="value" id="m-acc">—</span></div>
+  </div>
+  <div class="hud-block">
+    <div class="metric"><span class="label">ระดับ</span><span class="value" id="m-level">1</span></div>
+    <div class="metric"><span class="label">จับได้</span><span class="value" id="m-caught">0</span></div>
+  </div>
+</div>
+
+<div id="meter-wrap" class="hidden">
+  <div id="meter-track"><div id="meter-fill"></div></div>
+  <div id="meter-label"></div>
+</div>
+
+<div id="banner"></div>
+
+<div id="cam"><video id="video" playsinline muted></video></div>
+
+<!-- ============ START ============ -->
+<div class="screen active" id="screen-start">
+  <div class="card">
+    <p class="eyebrow">Focus Time / เกมที่ 2</p>
+    <h1>เพ่งจุด</h1>
+    <p>มองตามจุดสีเหลืองค้างไว้จนวงแหวนเต็ม จุดจะเลื่อนไปมุมใหม่ ทำซ้ำไปเรื่อย ๆ
+       ยิ่งเล่นนานเวลาโฟกัสยิ่งสะสม</p>
+    <ul class="rules">
+      <li>ต้องมองที่ <b>ตัวจุด</b> จริง ๆ ค้างไว้ประมาณ 1.2 วินาที — อยู่โซนเดียวกันเฉย ๆ ไม่นับ</li>
+      <li>วงกลมประจะเป็นสีเขียวเมื่อกำลังนับ ถ้าละสายตาออกไปไกล วงแหวนจะถอยกลับ</li>
+      <li>ระดับ 3 ขึ้นไปจะมีสิ่งรบกวน<b>สีชมพู</b>โผล่มา เปลี่ยนรูปทรงไปเรื่อย ๆ (วงกลม สี่เหลี่ยม สามเหลี่ยม ฯลฯ) — ห้ามมอง ปล่อยให้หายไปเอง</li>
+      <li>มาตรวัดด้านล่างหมด = จบรอบ</li>
+    </ul>
+    <div class="row">
+      <button class="primary" id="btn-camera">เริ่มด้วยกล้อง</button>
+      <button id="btn-mouse">ทดสอบด้วยเมาส์</button>
+    </div>
+    <p class="note" style="margin-top:16px">
+      โหมดเมาส์ใช้สำหรับทดสอบเกมตอนไม่มีกล้อง ผลของรอบนั้นจะไม่ถูกบันทึกเป็นเวลาโฟกัส
+    </p>
+    <div class="error" id="start-error"></div>
+  </div>
+</div>
+
+<!-- ============ RESULT ============ -->
+<div class="screen" id="screen-end">
+  <div class="card">
+    <p class="eyebrow">สรุปรอบนี้</p>
+    <div class="grade" id="r-grade">A</div>
+    <h2 id="r-headline">โฟกัสได้ดี</h2>
+    <div id="r-flag" class="flag hidden"></div>
+    <div class="stat-list" id="r-stats"></div>
+    <div class="row">
+      <button class="primary" id="btn-again">เล่นอีกรอบ</button>
+      <button id="btn-home">กลับหน้าแรก</button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+/* Both heavy dependencies are loaded lazily inside startCamera(). If they
+   were static top-level imports, a missing focus-gaze/ folder would kill
+   the whole script before any button listener was attached. */
+const MODEL_DIR = "./focus-gaze";   // <- change if you move the folder
+const MEDIAPIPE_CDN = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+const MEDIAPIPE_WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
+const FACE_TASK = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
+
+/* =====================================================================
+   TUNING — every number here is chosen against the shipped model's real
+   accuracy (161px horizontal / 216px vertical / 311px euclidean, and a
+   10-20s warm-up before it settles). Do not shrink the tolerances below
+   the model's error or the game becomes luck.
+   ===================================================================== */
+const CFG = {
+  warmupMs:        15000,  // README: first 10-20s are the least accurate
+  minConfidence:   0.4,    // below this the frame is unusable, not "off target"
+  /* Capture requires looking AT the dot, not merely into its zone. The
+     radii below are the capture field, sized just above the model's real
+     error (161px x / 216px y) so an honest look still registers. Anything
+     tighter than this is not measurable with this model. */
+  requireDirectLook: true,
+  tolXFrac:        0.115,  // ~220px on a 1920 screen
+  tolYFrac:        0.26,   // ~280px on a 1080 screen
+  /* Grace band: the ring outside the capture field where the hold freezes
+     instead of decaying. It starts generous, because early on the model is
+     still settling, and tightens each level until the only forgiving thing
+     left is the capture field itself. */
+  graceBand:       1.40,   // multiplier at level 1
+  graceBandStep:   0.05,   // removed per level
+  graceBandMin:    1.05,   // never fully disappears — model jitter is real
+  dwellMs:         1200,   // hold to capture at level 1
+  dwellFloorMs:    900,    // never ask for a shorter hold than this
+  dwellStepMs:     50,     // shaved per level
+  releaseRate:     1.5,    // hold decays 1.5x slower than it builds (teammate's rule)
+  travelMsBase:    1300,   // how long the dot takes to slide to a new zone
+  travelMsFloor:   600,
+  capturesPerLevel: 4,
+  /* Movement phases. Levels 1-2 are jump-and-hold. From driftFromLevel the
+     dot wanders inside its own zone; from roamFromLevel it steers freely
+     across the whole screen. Free movement is smooth pursuit, which the eye
+     tracks well — the difficulty is in the heading changes, not in speed,
+     so speeds stay low enough that the model's smoothing can keep up. */
+  driftFromLevel:  3,
+  roamFromLevel:   5,
+  driftSpeed:      52,   // px/s at the first drifting level
+  driftSpeedStep:  16,   // added per level after that
+  driftSpeedMax:   185,
+  turnRate:        0.55, // rad/s of random heading wander
+  turnRateStep:    0.16,
+  turnRateMax:     1.5,
+  veerBoost:       1.7,  // speed multiplier for a moment after a capture
+  jumpChance:      0.28, // chance a capture still throws the dot to a new zone
+  /* Chaos: from this level the dot stops moving at a steady wander and
+     switches between "moods" at random intervals. Unpredictability comes
+     from WHEN it changes, not from raw speed — a fast straight line is
+     easy to follow, an arc that turns into a stall is not. Speeds stay
+     inside what the model's smoothing can track. */
+  chaosFromLevel:  7,
+  moodMsMax:       2200, // longest a mood lasts at the first chaotic level
+  moodMsMin:       520,  // shortest it can get at high level
+  moodMsStep:      170,  // shaved per level
+  arcRate:         1.15, // rad/s of sustained curve during an arc
+  dashMult:        1.85, // speed multiplier during a dash
+  hoverMult:       0.16, // speed multiplier during a stall
+  jinkTurnMin:     1.9,  // radians of an instant direction snap
+  edgePad:         120,  // keep the dot's ring fully on screen
+  decoyRepel:      260,  // steer away from decoy zones within this radius
+  decoyFromLevel:  3,
+  decoyLifeMs:     2600,
+  decoyGapMs:      4200,
+  decoyLookMs:     500,    // looking at a decoy this long counts as "took the bait"
+  meterDrain:      14,     // % per second while off target
+  meterRefill:     20,     // % per second while on target
+  sessionCapMs:    300000, // hard stop at 5 minutes
+};
+
+/* Scoring rubric — this is the answer to "แต้มใช้เกณฑ์อะไรวัด".
+   Points measure captures, not time, so idling never earns anything. */
+const PTS = {
+  capture:       100,   // x level multiplier
+  streakStep:    20,    // per consecutive capture, capped
+  streakCap:     5,
+  resistDecoy:   50,
+  followDecoy:  -30,
+  levelClear:   150,
+};
+
+const ZONE_COLS = 3, ZONE_ROWS = 2;
+
+/* ---------- element refs ---------- */
+const $ = (id) => document.getElementById(id);
+const elZones = $("zones"), elDot = $("dot"), elRing = $("hold-ring"), elCore = $("dot-core");
+const elGaze = $("gaze"), elHud = $("hud"), elMeterWrap = $("meter-wrap"), elMeter = $("meter-fill");
+const elMeterLabel = $("meter-label"), elBanner = $("banner"), elCam = $("cam"), video = $("video");
+const elField = $("field-ring"), elGrace = $("grace-ring");
+
+const cells = [];
+for (let r = 0; r < ZONE_ROWS; r++) {
+  for (let c = 0; c < ZONE_COLS; c++) {
+    const d = document.createElement("div");
+    d.className = "cell";
+    elZones.appendChild(d);
+    cells.push(d);
+  }
+}
+const cellAt = (col, row) => cells[row * ZONE_COLS + col];
+
+/* ---------- session state ---------- */
+let faceLandmarker = null, gazeModel = null, stream = null;
+let mouseMode = false, mousePt = null;
+let running = false, lastT = 0;
+
+const S = {};
+function resetSession() {
+  S.score = 0; S.level = 1; S.captures = 0; S.streak = 0;
+  S.hold = 0; S.meter = 100; S.focusMs = 0; S.elapsedMs = 0;
+  S.onTargetFrames = 0; S.nearFrames = 0; S.validFrames = 0; S.totalFrames = 0;
+  S.resisted = 0; S.followed = 0; S.levelsCleared = 0;
+  S.warmupLeft = mouseMode ? 0 : CFG.warmupMs;
+  S.decoys = []; S.nextDecoyAt = 0; S.decoyGaze = new Map();
+  S.dot = { x: 0, y: 0, fromX: 0, fromY: 0, toX: 0, toY: 0, travel: 0, travelMs: 0,
+            col: 1, row: 0, dir: Math.random() * Math.PI * 2, speed: 0, boost: 0,
+            mood: "cruise", moodLeft: 0, arcSign: 1 };
+}
+
+/* ---------- geometry ---------- */
+const W = () => window.innerWidth;
+const H = () => window.innerHeight;
+const tolX = () => Math.max(150, W() * CFG.tolXFrac);
+const tolY = () => Math.max(180, H() * CFG.tolYFrac);
+const graceBandNow = () =>
+  Math.max(CFG.graceBandMin, CFG.graceBand - (S.level - 1) * CFG.graceBandStep);
+const dwellMs = () => Math.max(CFG.dwellFloorMs, CFG.dwellMs - (S.level - 1) * CFG.dwellStepMs);
+const travelMs = () => Math.max(CFG.travelMsFloor, CFG.travelMsBase - (S.level - 1) * 80);
+
+/* Dots only ever live at zone centres (with a little jitter) — the model
+   resolves a 3x2 grid honestly, so "corners" is the finest target the
+   hardware supports. */
+function zonePoint(col, row) {
+  const cw = W() / ZONE_COLS, ch = H() / ZONE_ROWS;
+  const jx = (Math.random() - 0.5) * cw * 0.24;
+  const jy = (Math.random() - 0.5) * ch * 0.24;
+  return { x: cw * (col + 0.5) + jx, y: ch * (row + 0.5) + jy };
+}
+
+/* avoid = list of {col,row} that must not be chosen. Falls back to "any
+   zone but the first one listed" if every zone is somehow blocked. */
+function pickZone(avoid = []) {
+  const blocked = (c, r) => avoid.some((a) => a && a.col === c && a.row === r);
+  const opts = [];
+  for (let r = 0; r < ZONE_ROWS; r++)
+    for (let c = 0; c < ZONE_COLS; c++)
+      if (!blocked(c, r)) opts.push({ col: c, row: r });
+  if (opts.length === 0) {
+    const first = avoid[0] || { col: -1, row: -1 };
+    for (let r = 0; r < ZONE_ROWS; r++)
+      for (let c = 0; c < ZONE_COLS; c++)
+        if (c !== first.col || r !== first.row) opts.push({ col: c, row: r });
+  }
+  return opts[Math.floor(Math.random() * opts.length)];
+}
+
+const decoyZones = () => S.decoys.map((d) => ({ col: d.col, row: d.row }));
+
+function moveDotToNewZone(instant = false) {
+  // The target never lands on a zone a decoy is already occupying —
+  // otherwise following the target would read as taking the bait.
+  const z = pickZone([{ col: S.dot.col, row: S.dot.row }, ...decoyZones()]);
+  const p = zonePoint(z.col, z.row);
+  S.dot.fromX = S.dot.x; S.dot.fromY = S.dot.y;
+  S.dot.toX = p.x; S.dot.toY = p.y;
+  S.dot.col = z.col; S.dot.row = z.row;
+  S.dot.travelMs = instant ? 0 : travelMs();
+  S.dot.travel = 0;
+  if (instant) { S.dot.x = p.x; S.dot.y = p.y; }
+}
+
+/* ---------- movement ---------- */
+const movePhase = () =>
+  S.level >= CFG.roamFromLevel ? "roam" : S.level >= CFG.driftFromLevel ? "drift" : "jump";
+const driftSpeed = () =>
+  Math.min(CFG.driftSpeedMax, CFG.driftSpeed + (S.level - CFG.driftFromLevel) * CFG.driftSpeedStep);
+const turnRate = () =>
+  Math.min(CFG.turnRateMax, CFG.turnRate + (S.level - CFG.driftFromLevel) * CFG.turnRateStep);
+
+/* Bounds the dot is allowed to wander in: its own zone while drifting,
+   the whole screen (minus padding) once it roams. */
+function bounds() {
+  const pad = Math.min(CFG.edgePad, W() * 0.2, H() * 0.2);
+  if (movePhase() === "roam") {
+    return { x0: pad, y0: pad, x1: Math.max(pad, W() - pad), y1: Math.max(pad, H() - pad) };
+  }
+  const cw = W() / ZONE_COLS, ch = H() / ZONE_ROWS;
+  const x0 = Math.max(pad, S.dot.col * cw + pad * 0.5);
+  const y0 = Math.max(pad, S.dot.row * ch + pad * 0.5);
+  return {
+    x0, y0,
+    x1: Math.max(x0, Math.min(W() - pad, (S.dot.col + 1) * cw - pad * 0.5)),
+    y1: Math.max(y0, Math.min(H() - pad, (S.dot.row + 1) * ch - pad * 0.5)),
+  };
+}
+
+/* Soft steering away from live decoys, so free movement doesn't drag the
+   target into a zone the player is being told to ignore. */
+function decoySteer() {
+  let ax = 0, ay = 0;
+  for (const d of S.decoys) {
+    const dx = S.dot.x - d.x, dy = S.dot.y - d.y;
+    const dist = Math.hypot(dx, dy) || 1;
+    if (dist < CFG.decoyRepel) {
+      const w = (CFG.decoyRepel - dist) / CFG.decoyRepel;
+      ax += (dx / dist) * w; ay += (dy / dist) * w;
+    }
+  }
+  return ax || ay ? Math.atan2(ay, ax) : null;
+}
+
+function angleTowards(from, to, maxStep) {
+  let diff = ((to - from + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+  return from + Math.max(-maxStep, Math.min(maxStep, diff));
+}
+
+/* A capture at drifting levels sends the dot off on a new heading instead
+   of teleporting it — that is the "freestyle" part. */
+function veer() {
+  const turn = (Math.PI / 2) + Math.random() * (Math.PI / 2);
+  S.dot.dir += Math.random() < 0.5 ? turn : -turn;
+  S.dot.boost = 600;
+}
+
+/* The moods. cruise is the old steady wander; the rest exist to break the
+   rhythm the player builds up. jink is instantaneous — it snaps the
+   heading once and hands straight back to cruise. */
+function pickMood() {
+  const over = S.level - CFG.chaosFromLevel;
+  const roll = Math.random();
+  // Later levels lean harder on the disruptive moods.
+  const wild = Math.min(0.62, 0.34 + over * 0.05);
+  let mood = "cruise";
+  if (roll < wild) {
+    const r = Math.random();
+    mood = r < 0.34 ? "arc" : r < 0.62 ? "dash" : r < 0.84 ? "hover" : "jink";
+  }
+  const span = Math.max(CFG.moodMsMin, CFG.moodMsMax - over * CFG.moodMsStep);
+  S.dot.mood = mood;
+  S.dot.moodLeft = mood === "jink" ? 120 : span * (0.55 + Math.random() * 0.45);
+  S.dot.arcSign = Math.random() < 0.5 ? -1 : 1;
+  if (mood === "jink") {
+    const turn = CFG.jinkTurnMin + Math.random() * (Math.PI - CFG.jinkTurnMin);
+    S.dot.dir += Math.random() < 0.5 ? turn : -turn;
+  }
+}
+
+function updateDotMotion(dt) {
+  // A queued jump always finishes first.
+  if (S.dot.travel < S.dot.travelMs) {
+    S.dot.travel = Math.min(S.dot.travelMs, S.dot.travel + dt);
+    const t = S.dot.travelMs ? S.dot.travel / S.dot.travelMs : 1;
+    const e = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2; // ease-in-out
+    S.dot.x = S.dot.fromX + (S.dot.toX - S.dot.fromX) * e;
+    S.dot.y = S.dot.fromY + (S.dot.toY - S.dot.fromY) * e;
+    // Head roughly the way it was already travelling when it lands.
+    S.dot.dir = Math.atan2(S.dot.toY - S.dot.fromY, S.dot.toX - S.dot.fromX) || S.dot.dir;
+    syncDotZone();
+    return;
+  }
+  if (movePhase() === "jump") return; // levels 1-2: sits still between jumps
+
+  const sec = dt / 1000;
+  const chaotic = S.level >= CFG.chaosFromLevel;
+
+  // Swap moods on a timer the player can't read.
+  if (chaotic) {
+    S.dot.moodLeft -= dt;
+    if (S.dot.moodLeft <= 0) pickMood();
+  } else {
+    S.dot.mood = "cruise";
+  }
+
+  // Wander the heading. An arc replaces the random walk with a sustained
+  // curve; a dash holds a near-straight line; a stall wobbles in place.
+  const m = S.dot.mood;
+  const wanderScale = m === "dash" ? 0.25 : m === "hover" ? 2.2 : 1;
+  S.dot.dir += (Math.random() - 0.5) * turnRate() * sec * 2 * wanderScale;
+  if (m === "arc") S.dot.dir += CFG.arcRate * S.dot.arcSign * sec;
+
+  // Then bend away from any decoy nearby.
+  const away = decoySteer();
+  if (away !== null) S.dot.dir = angleTowards(S.dot.dir, away, 2.2 * sec);
+
+  S.dot.boost = Math.max(0, S.dot.boost - dt);
+  const moodMult = m === "dash" ? CFG.dashMult : m === "hover" ? CFG.hoverMult : 1;
+  const speed = driftSpeed() * moodMult * (S.dot.boost > 0 ? CFG.veerBoost : 1);
+  S.dot.x += Math.cos(S.dot.dir) * speed * sec;
+  S.dot.y += Math.sin(S.dot.dir) * speed * sec;
+
+  // Reflect off the edges of whatever area it is confined to.
+  const b = bounds();
+  if (S.dot.x < b.x0) { S.dot.x = b.x0; S.dot.dir = Math.PI - S.dot.dir; }
+  if (S.dot.x > b.x1) { S.dot.x = b.x1; S.dot.dir = Math.PI - S.dot.dir; }
+  if (S.dot.y < b.y0) { S.dot.y = b.y0; S.dot.dir = -S.dot.dir; }
+  if (S.dot.y > b.y1) { S.dot.y = b.y1; S.dot.dir = -S.dot.dir; }
+
+  syncDotZone();
+}
+
+/* While roaming, the dot's zone is wherever it actually is — the decoy
+   rules and the hit test both read this. */
+function syncDotZone() {
+  const z = zoneOf(S.dot.x, S.dot.y);
+  S.dot.col = z.col; S.dot.row = z.row;
+}
+
+/* Hit test. With requireDirectLook on, being in the dot's zone is NOT
+   enough — the gaze has to fall inside the capture field around the dot
+   itself. Three states, because a hard in/out edge would punish the
+   model's own jitter:
+     on   — inside the field, hold builds
+     near — inside the grace band, hold freezes (neither builds nor decays)
+     off  — hold decays
+   Distances are normalised per axis, so the field is an ellipse matching
+   the model being better horizontally than vertically. */
+function targetState(px, py, zone) {
+  const dx = (px - S.dot.x) / tolX();
+  const dy = (py - S.dot.y) / tolY();
+  const r = Math.hypot(dx, dy);
+  if (r <= 1) return "on";
+  if (!CFG.requireDirectLook && zone && zone.col === S.dot.col && zone.row === S.dot.row) return "on";
+  if (r <= graceBandNow()) return "near";
+  return "off";
+}
+
+/* Same rule for decoys: you have to actually look at one to take the
+   bait, not just share a zone with it. */
+function decoyState(px, py, d) {
+  const dx = (px - d.x) / tolX();
+  const dy = (py - d.y) / tolY();
+  return Math.hypot(dx, dy) <= 1;
+}
+
+function zoneOf(px, py) {
+  return {
+    col: Math.max(0, Math.min(2, Math.floor((px / W()) * ZONE_COLS))),
+    row: Math.max(0, Math.min(1, Math.floor((py / H()) * ZONE_ROWS))),
+  };
+}
+
+/* ---------- decoys ---------- */
+/* The distraction set. Shapes unlock with level, so the kind of
+   interference grows as well as the amount. Static shapes are easier to
+   filter out than moving ones, so those come first. */
+const DECOY_TYPES = [
+  { id: "pulse", cls: "d-pulse", minLevel: 3, speed: 0,  parts: 0 },
+  { id: "blink", cls: "d-blink", minLevel: 4, speed: 0,  parts: 0 },
+  { id: "drift", cls: "d-drift", minLevel: 5, speed: 78, parts: 0 },
+  { id: "swarm", cls: "d-swarm", minLevel: 6, speed: 46, parts: 3 },
+  { id: "twin",  cls: "d-twin",  minLevel: 7, speed: 62, parts: 1 },
+];
+
+function spawnDecoy() {
+  const pool = DECOY_TYPES.filter((t) => S.level >= t.minLevel);
+  // Weight the newest unlocked shape a little so a fresh one shows up soon.
+  const t = Math.random() < 0.45 ? pool[pool.length - 1] : pool[Math.floor(Math.random() * pool.length)];
+
+  const z = pickZone([{ col: S.dot.col, row: S.dot.row }, ...decoyZones()]);
+  const p = zonePoint(z.col, z.row);
+  const el = document.createElement("div");
+  el.className = "decoy " + t.cls;
+  for (let i = 0; i < t.parts; i++) el.appendChild(document.createElement("i"));
+  el.style.left = p.x + "px";
+  el.style.top = p.y + "px";
+  document.body.appendChild(el);
+
+  S.decoys.push({
+    el, type: t.id, col: z.col, row: z.row, x: p.x, y: p.y,
+    dir: Math.random() * Math.PI * 2, speed: t.speed,
+    life: CFG.decoyLifeMs, look: 0,
+  });
+}
+
+/* Moving decoys steer away from the target — a decoy that wanders onto
+   the dot would make following the target look like taking the bait. */
+function moveDecoy(d, dt) {
+  if (!d.speed) return;
+  const sec = dt / 1000;
+  d.dir += (Math.random() - 0.5) * 0.9 * sec * 2;
+
+  const dx = d.x - S.dot.x, dy = d.y - S.dot.y;
+  const gap = Math.hypot(dx, dy) || 1;
+  const keepOut = Math.max(tolX(), tolY()) * 1.8;
+  if (gap < keepOut) d.dir = angleTowards(d.dir, Math.atan2(dy, dx), 3.0 * sec);
+
+  d.x += Math.cos(d.dir) * d.speed * sec;
+  d.y += Math.sin(d.dir) * d.speed * sec;
+
+  const pad = 70;
+  if (d.x < pad)        { d.x = pad;        d.dir = Math.PI - d.dir; }
+  if (d.x > W() - pad)  { d.x = W() - pad;  d.dir = Math.PI - d.dir; }
+  if (d.y < pad)        { d.y = pad;        d.dir = -d.dir; }
+  if (d.y > H() - pad)  { d.y = H() - pad;  d.dir = -d.dir; }
+
+  d.el.style.left = d.x + "px";
+  d.el.style.top = d.y + "px";
+  const z = zoneOf(d.x, d.y);
+  d.col = z.col; d.row = z.row;
+}
+
+function clearDecoys() {
+  S.decoys.forEach((d) => d.el.remove());
+  S.decoys = [];
+}
+
+function updateDecoys(dt, gp, onTargetNow) {
+  if (S.level >= CFG.decoyFromLevel) {
+    S.nextDecoyAt -= dt;
+    const maxLive = Math.min(3, 1 + Math.floor((S.level - CFG.decoyFromLevel) / 2));
+    if (S.nextDecoyAt <= 0 && S.decoys.length < maxLive) {
+      spawnDecoy();
+      S.nextDecoyAt = Math.max(2000, CFG.decoyGapMs - (S.level - CFG.decoyFromLevel) * 250);
+    }
+  }
+  for (let i = S.decoys.length - 1; i >= 0; i--) {
+    const d = S.decoys[i];
+    d.life -= dt;
+    moveDecoy(d, dt);
+
+    // Safety net: if a decoy and the target end up close enough that one
+    // gaze reading can't tell them apart, the decoy is unjudgeable —
+    // retire it with no penalty and no resist bonus.
+    const ndx = (d.x - S.dot.x) / tolX(), ndy = (d.y - S.dot.y) / tolY();
+    if (Math.hypot(ndx, ndy) <= graceBandNow() + 0.25) {
+      d.el.remove();
+      S.decoys.splice(i, 1);
+      continue;
+    }
+
+    const gazeHere = gp && decoyState(gp.x, gp.y, d);
+    // Being on the target always wins over being near a decoy.
+    if (gazeHere && !onTargetNow) {
+      d.look += dt;
+      if (d.look >= CFG.decoyLookMs && !d.taken) {
+        d.taken = true;
+        S.followed++;
+        S.score += PTS.followDecoy;
+        S.hold *= 0.5;
+        S.streak = 0;
+        flash("เสียสมาธิ", "ของสีชมพูคือสิ่งรบกวน — เป้าหมายคือจุดสีเหลือง");
+      }
+    } else {
+      // A glance that passes through shouldn't stack up over the whole life.
+      d.look = Math.max(0, d.look - dt);
+    }
+
+    if (d.life <= 0) {
+      if (!d.taken) { S.resisted++; S.score += PTS.resistDecoy; }
+      d.el.remove();
+      S.decoys.splice(i, 1);
+    }
+  }
+}
+
+/* ---------- feedback ---------- */
+let bannerUntil = 0;
+function flash(main, sub = "", ms = 900) {
+  elBanner.innerHTML = main + (sub ? `<div class="sub">${sub}</div>` : "");
+  bannerUntil = performance.now() + ms;
+}
+
+/* ---------- main loop ---------- */
+function tick(now) {
+  if (!running) return;
+  const dt = Math.min(100, now - lastT || 16);
+  lastT = now;
+  S.elapsedMs += dt;
+
+  /* --- 1. where is the user looking --- */
+  let gp = null;
+  if (mouseMode) {
+    if (mousePt) gp = { x: mousePt.x, y: mousePt.y, confidence: 1, zone: zoneOf(mousePt.x, mousePt.y) };
+  } else if (faceLandmarker && video.readyState >= 2) {
+    const res = faceLandmarker.detectForVideo(video, now);
+    const lm = res.faceLandmarks?.[0];
+    const bs = res.faceBlendshapes?.[0]?.categories;
+    if (lm) {
+      const p = gazeModel.predict(lm, bs);
+      if (p.x !== null) gp = { x: p.x * W(), y: p.y * H(), confidence: p.confidence, zone: p.zone };
+    }
+  }
+
+  S.totalFrames++;
+  const usable = gp && gp.confidence >= CFG.minConfidence;
+  if (usable) S.validFrames++;
+
+  /* --- 2. gaze cursor + zone highlight --- */
+  cells.forEach((c) => c.classList.remove("lit"));
+  if (usable) {
+    elGaze.classList.remove("hidden");
+    elGaze.style.left = gp.x + "px";
+    elGaze.style.top = gp.y + "px";
+    elGaze.style.opacity = String(0.35 + 0.55 * gp.confidence);
+    if (gp.zone) cellAt(gp.zone.col, gp.zone.row).classList.add("lit");
+  } else {
+    elGaze.classList.add("hidden");
+  }
+
+  /* --- 3. dot motion --- */
+  updateDotMotion(dt);
+  elDot.style.left = S.dot.x + "px";
+  elDot.style.top = S.dot.y + "px";
+
+  /* --- 4. warm-up: model is not trustworthy yet, so nothing counts --- */
+  if (S.warmupLeft > 0) {
+    S.warmupLeft -= dt;
+    elMeterLabel.textContent = `กำลังปรับตัวให้เข้ากับคุณ… ${Math.ceil(S.warmupLeft / 1000)} วินาที (ยังไม่เริ่มนับคะแนน)`;
+    if (S.warmupLeft <= 0) flash("เริ่ม", "มองตามจุดสีเหลือง", 1200);
+    drawHud();
+    requestAnimationFrame(tick);
+    return;
+  }
+
+  /* --- 5. hold accumulation --- */
+  const state = usable ? targetState(gp.x, gp.y, gp.zone) : "unusable";
+  const hit = state === "on";
+  if (hit) {
+    S.hold += dt;
+    S.focusMs += dt;
+    S.onTargetFrames++;
+    S.meter = Math.min(100, S.meter + (CFG.meterRefill * dt) / 1000);
+  } else if (state === "near") {
+    // Just outside the field: this is as likely to be model error as a
+    // wandering eye, so nothing is gained and nothing is lost.
+    S.nearFrames++;
+  } else if (state === "off") {
+    // Only a confident "you are looking elsewhere" decays the hold.
+    // A low-confidence frame (blink, turned head) freezes it instead.
+    S.hold = Math.max(0, S.hold - (dt / CFG.releaseRate));
+    S.meter = Math.max(0, S.meter - (CFG.meterDrain * dt) / 1000);
+  }
+
+  // The capture field, drawn so the rule is visible: green = counting,
+  // amber = borderline, hidden = off target.
+  elField.style.width = tolX() * 2 + "px";
+  elField.style.height = tolY() * 2 + "px";
+  elField.style.left = S.dot.x + "px";
+  elField.style.top = S.dot.y + "px";
+  elField.className = "state-" + (state === "unusable" ? "off" : state);
+  const band = graceBandNow();
+  elGrace.style.width = tolX() * 2 * band + "px";
+  elGrace.style.height = tolY() * 2 * band + "px";
+  elGrace.style.left = S.dot.x + "px";
+  elGrace.style.top = S.dot.y + "px";
+  elGrace.className = state === "near" ? "state-near" : "";
+
+  const need = dwellMs();
+  elRing.style.strokeDashoffset = String(289 * (1 - Math.min(1, S.hold / need)));
+  elCore.setAttribute("r", String(17 + 5 * Math.min(1, S.hold / need)));
+
+  if (S.hold >= need) {
+    S.hold = 0;
+    S.captures++;
+    S.streak = Math.min(PTS.streakCap, S.streak + 1);
+    S.score += PTS.capture * S.level + PTS.streakStep * S.streak;
+    S.meter = Math.min(100, S.meter + 8);
+    if (S.captures % CFG.capturesPerLevel === 0) {
+      S.level++;
+      S.levelsCleared++;
+      S.score += PTS.levelClear;
+      let sub = graceBandNow() > CFG.graceBandMin ? "ขอบผ่อนผันแคบลง — ต้องมองตรงขึ้น" : "จุดจะเลื่อนเร็วขึ้น";
+      if (S.level === CFG.decoyFromLevel) sub = "เริ่มมีจุดกวน — อย่ามอง";
+      if (S.level === CFG.driftFromLevel) sub = "จุดเริ่มขยับเองตลอดเวลา";
+      if (S.level === CFG.roamFromLevel) sub = "จุดจะวิ่งอิสระทั้งจอ";
+      if (S.level === CFG.chaosFromLevel) sub = "จุดจะเปลี่ยนทิศแบบคาดเดาไม่ได้";
+      flash(`ระดับ ${S.level}`, sub, 1400);
+    } else {
+      flash("จับได้", "", 600);
+    }
+    // Low levels always jump. Once the dot moves on its own it usually just
+    // changes direction, and only sometimes jumps — so the player can't
+    // predict which one is coming.
+    if (movePhase() === "jump" || Math.random() < CFG.jumpChance) moveDotToNewZone();
+    else veer();
+  }
+
+  // Streak is a reward for clean consecutive captures: losing the dot
+  // entirely (hold back to zero after having built some) breaks it.
+  if (state === "off" && S.hold === 0) S.streak = 0;
+
+  updateDecoys(dt, usable ? gp : null, hit);
+
+  /* --- 6. meter / end conditions --- */
+  elMeter.style.width = S.meter + "%";
+  elMeter.style.background = S.meter > 55 ? "var(--good)" : S.meter > 25 ? "var(--target)" : "var(--bad)";
+  if (!usable) {
+    elMeterLabel.textContent = gp ? "สัญญาณไม่ชัด — ลองนั่งตรง ๆ ให้เห็นหน้าเต็ม" : "ไม่เจอหน้า";
+  } else {
+    elMeterLabel.textContent = hit ? "" : state === "near" ? "เกือบตรงแล้ว — มองที่ตัวจุด" : "กลับมามองจุดสีเหลือง";
+  }
+
+  if (S.meter <= 0 || S.elapsedMs >= CFG.sessionCapMs) { endSession(); return; }
+
+  if (now > bannerUntil) elBanner.textContent = "";
+  drawHud();
+  requestAnimationFrame(tick);
+}
+
+function drawHud() {
+  $("m-score").textContent = Math.max(0, Math.round(S.score));
+  const sec = Math.floor(S.focusMs / 1000);
+  $("m-time").textContent = `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
+  $("m-acc").textContent = S.validFrames > 30 ? Math.round((S.onTargetFrames / S.validFrames) * 100) + "%" : "—";
+  $("m-level").textContent = S.level;
+  $("m-caught").textContent = S.captures;
+}
+
+/* =====================================================================
+   RESULT — the explicit rubric, so the score is defensible
+   ===================================================================== */
+function endSession() {
+  running = false;
+  clearDecoys();
+  elDot.classList.add("hidden");
+  elField.classList.add("hidden");
+  elGrace.classList.add("hidden");
+  elGaze.classList.add("hidden");
+  elHud.classList.add("hidden");
+  elMeterWrap.classList.add("hidden");
+  elBanner.textContent = "";
+
+  const accuracy = S.validFrames > 0 ? S.onTargetFrames / S.validFrames : 0;
+  const tracking = S.totalFrames > 0 ? S.validFrames / S.totalFrames : 0;
+  const focusSeconds = Math.round(S.focusMs / 1000);
+  const score = Math.max(0, Math.round(S.score));
+
+  // Grade is measured on accuracy (share of usable frames spent on target),
+  // NOT on score — score rewards volume, grade rewards quality.
+  let grade = "D", headline = "ยังหลุดโฟกัสบ่อย";
+  if (accuracy >= 0.90)      { grade = "S"; headline = "โฟกัสนิ่งมาก"; }
+  else if (accuracy >= 0.80) { grade = "A"; headline = "โฟกัสได้ดี"; }
+  else if (accuracy >= 0.65) { grade = "B"; headline = "โฟกัสได้พอใช้"; }
+  else if (accuracy >= 0.50) { grade = "C"; headline = "โฟกัสติด ๆ ขัด ๆ"; }
+  $("r-grade").textContent = grade;
+  $("r-headline").textContent = headline;
+
+  const rated = !mouseMode && tracking >= 0.6 && S.validFrames > 300;
+  const flagEl = $("r-flag");
+  if (mouseMode) {
+    flagEl.classList.remove("hidden");
+    flagEl.textContent = "รอบทดสอบด้วยเมาส์ — ไม่นับเป็นเวลาโฟกัสในสถิติ";
+  } else if (!rated) {
+    flagEl.classList.remove("hidden");
+    flagEl.textContent = `กล้องเห็นหน้าชัดแค่ ${Math.round(tracking * 100)}% ของรอบนี้ ผลจึงไม่ถูกบันทึก — ลองเล่นในที่สว่างขึ้นและนั่งให้เห็นหน้าเต็มกรอบ`;
+  } else {
+    flagEl.classList.add("hidden");
+  }
+
+  $("r-stats").innerHTML = [
+    ["เวลาโฟกัสสะสม", fmtSec(focusSeconds)],
+    ["จับจุดได้", `${S.captures} จุด`],
+    ["ระดับที่ถึง", String(S.level)],
+    ["ความแม่นยำ (เฟรมที่อยู่บนเป้า / เฟรมที่ใช้ได้)", `${Math.round(accuracy * 100)}%`],
+    ["ต้านจุดกวนได้", `${S.resisted} ครั้ง`],
+    ["เผลอมองจุดกวน", `${S.followed} ครั้ง`],
+    ["คุณภาพการติดตามใบหน้า", `${Math.round(tracking * 100)}%`],
+  ].map(([k, v]) => `<div class="stat"><span class="k">${k}</span><span class="v">${v}</span></div>`)
+   .join("") + `<div class="stat total"><span class="k">คะแนนรวม</span><span class="v">${score}</span></div>`;
+
+  const payload = {
+    game: "focus-dot", version: 1, rated,
+    score, focusSeconds, accuracy: +accuracy.toFixed(3), grade,
+    level: S.level, captures: S.captures,
+    decoysResisted: S.resisted, decoysFollowed: S.followed,
+    trackingQuality: +tracking.toFixed(3),
+    durationSeconds: Math.round(S.elapsedMs / 1000),
+    inputMode: mouseMode ? "mouse" : "gaze",
+  };
+  // Two ways for the site to pick this up: same-page event, or iframe message.
+  window.dispatchEvent(new CustomEvent("focustime:result", { detail: payload }));
+  if (window.parent !== window) window.parent.postMessage({ type: "focustime:result", payload }, "*");
+
+  $("screen-end").classList.add("active");
+}
+
+const fmtSec = (s) => `${Math.floor(s / 60)} นาที ${String(s % 60).padStart(2, "0")} วินาที`;
+
+/* =====================================================================
+   BOOT
+   ===================================================================== */
+async function startCamera() {
+  const err = $("start-error");
+  const btn = $("btn-camera");
+  err.textContent = "";
+  btn.disabled = true;
+  let stage = "";
+  try {
+    if (location.protocol === "file:") {
+      throw new Error("หน้านี้ถูกเปิดแบบ file:// — เบราว์เซอร์จะบล็อกทั้งกล้องและการโหลดโมเดล");
+    }
+
+    stage = "กล้อง";
+    btn.textContent = "กำลังขอกล้อง…";
+    stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: false });
+    video.srcObject = stream;
+    await video.play();
+
+    stage = "MediaPipe";
+    btn.textContent = "กำลังโหลด MediaPipe…";
+    const { FaceLandmarker, FilesetResolver } = await import(MEDIAPIPE_CDN);
+    const fileset = await FilesetResolver.forVisionTasks(MEDIAPIPE_WASM);
+    const base = { modelAssetPath: FACE_TASK };
+    try {
+      faceLandmarker = await FaceLandmarker.createFromOptions(fileset, {
+        baseOptions: { ...base, delegate: "GPU" }, runningMode: "VIDEO", numFaces: 1, outputFaceBlendshapes: true,
+      });
+    } catch {
+      faceLandmarker = await FaceLandmarker.createFromOptions(fileset, {
+        baseOptions: { ...base, delegate: "CPU" }, runningMode: "VIDEO", numFaces: 1, outputFaceBlendshapes: true,
+      });
+    }
+
+    stage = "โมเดล gaze";
+    btn.textContent = "กำลังโหลดโมเดล…";
+    const { GazeModel } = await import(`${MODEL_DIR}/gaze-model.js`);
+    gazeModel = await GazeModel.load(`${MODEL_DIR}/gaze-model.json`);
+
+    mouseMode = false;
+    elCam.style.display = "block";
+    beginPlay();
+  } catch (e) {
+    console.error(e);
+    let hint = "";
+    if (stage === "โมเดล gaze") {
+      hint = `\nหาไฟล์ไม่เจอที่ ${MODEL_DIR}/ — ต้องวางโฟลเดอร์ focus-gaze ไว้ข้างไฟล์นี้ (หรือแก้ค่า MODEL_DIR ในโค้ด)`;
+    } else if (stage === "กล้อง") {
+      hint = "\nต้องเปิดผ่าน http://localhost หรือ https:// และกดอนุญาตให้ใช้กล้อง";
+    } else if (stage === "MediaPipe") {
+      hint = "\nโหลดจาก CDN ไม่สำเร็จ — เช็คอินเทอร์เน็ต";
+    }
+    err.textContent = `เริ่มไม่ได้ (ขั้นตอน: ${stage || "เริ่มต้น"})\n${e?.message || e}${hint}`;
+    btn.disabled = false;
+    btn.textContent = "เริ่มด้วยกล้อง";
+  }
+}
+
+function startMouse() {
+  mouseMode = true;
+  elCam.style.display = "none";
+  beginPlay();
+}
+
+function beginPlay() {
+  $("screen-start").classList.remove("active");
+  $("screen-end").classList.remove("active");
+  resetSession();
+  S.dot.x = W() / 2; S.dot.y = H() / 2; S.dot.col = 1; S.dot.row = 0;
+  moveDotToNewZone(true);
+  elDot.classList.remove("hidden");
+  elField.classList.remove("hidden");
+  elGrace.classList.remove("hidden");
+  elHud.classList.remove("hidden");
+  elMeterWrap.classList.remove("hidden");
+  elMeter.style.width = "100%";
+  running = true;
+  lastT = performance.now();
+  requestAnimationFrame(tick);
+}
+
+function goHome() {
+  clearDecoys();
+  running = false;
+  elDot.classList.add("hidden");
+  elField.classList.add("hidden");
+  elGrace.classList.add("hidden");
+  $("screen-end").classList.remove("active");
+  $("screen-start").classList.add("active");
+  $("btn-camera").disabled = false;
+  $("btn-camera").textContent = "เริ่มด้วยกล้อง";
+}
+
+/* If anything else throws, say so on screen rather than dying quietly. */
+window.addEventListener("error", (e) => {
+  const err = $("start-error");
+  if (err) err.textContent = "เกิดข้อผิดพลาดในสคริปต์: " + (e.message || "");
+});
+
+window.addEventListener("mousemove", (e) => { mousePt = { x: e.clientX, y: e.clientY }; });
+window.addEventListener("resize", () => { if (running) moveDotToNewZone(true); });
+$("btn-camera").addEventListener("click", startCamera);
+$("btn-mouse").addEventListener("click", startMouse);
+$("btn-again").addEventListener("click", () => { if (mouseMode) startMouse(); else beginPlay(); });
+$("btn-home").addEventListener("click", goHome);
+</script>
+</body>
+</html>

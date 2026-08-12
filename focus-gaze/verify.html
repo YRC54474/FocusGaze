@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ตรวจสอบ gaze-model</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px; background: #0b0e14; color: #e8ecf1;
+    font-family: "Segoe UI", "Noto Sans Thai", system-ui, sans-serif;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; }
+  h1 { font-size: 20px; margin-bottom: 4px; }
+  p.sub { color: #9fb0c9; font-size: 14px; margin-top: 0; }
+  button {
+    cursor: pointer; border: none; border-radius: 8px; padding: 12px 22px;
+    font-size: 15px; font-weight: 600; background: #4c7cf3; color: white;
+    font-family: inherit;
+  }
+  button:disabled { background: #2a3550; color: #6d7893; cursor: not-allowed; }
+  .banner {
+    margin-top: 18px; padding: 16px 20px; border-radius: 10px; font-size: 18px;
+    font-weight: 700; display: none;
+  }
+  .banner.pass { display: block; background: #16321f; color: #7be08a; border: 1px solid #2c5a3a; }
+  .banner.fail { display: block; background: #3a1f22; color: #f19a9a; border: 1px solid #5c2a2e; }
+  table { width: 100%; border-collapse: collapse; margin-top: 18px; font-size: 12px; }
+  th, td { text-align: left; padding: 5px 7px; border-bottom: 1px solid #1d2432; }
+  th { color: #9fb0c9; font-weight: 600; position: sticky; top: 0; background: #0b0e14; }
+  tr.ok td.status { color: #7be08a; }
+  tr.bad td { background: #3a1f22; color: #f19a9a; }
+  .table-scroll { max-height: 480px; overflow-y: auto; border: 1px solid #262e3f; border-radius: 8px; }
+  code { background: #0f1420; padding: 2px 6px; border-radius: 4px; }
+  .error { color: #f19a9a; margin-top: 14px; white-space: pre-wrap; font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>ตรวจสอบ gaze-model.js</h1>
+  <p class="sub">รันลำดับเฟรมจำลอง 1 ช่วงการใช้งานผ่านโมเดลตัวเดียวกันตามลำดับเวลา
+  เทียบกับค่าที่ถูกต้อง ถ้าขึ้นแดงแปลว่าต่อโค้ดผิด ไม่ใช่โมเดลแม่นน้อย</p>
+  <button id="run-btn">รันตรวจสอบ</button>
+  <div class="banner" id="banner"></div>
+  <div class="error" id="error"></div>
+  <div class="table-scroll" style="display:none;" id="table-wrap">
+    <table id="results-table">
+      <thead>
+        <tr><th>#</th><th>ค่า</th><th>ที่ควรได้</th><th>ที่ได้จริง</th><th>ต่างกัน</th><th>ผล</th></tr>
+      </thead>
+      <tbody id="results-body"></tbody>
+    </table>
+  </div>
+</div>
+
+<script type="module">
+import { GazeModel } from './gaze-model.js';
+
+const TOLERANCE = 1e-4;
+const runBtn = document.getElementById('run-btn');
+const banner = document.getElementById('banner');
+const errorBox = document.getElementById('error');
+const tableWrap = document.getElementById('table-wrap');
+const tbody = document.getElementById('results-body');
+
+function sameZone(a, b) {
+  if (a === null || b === null) return a === b;
+  return a.col === b.col && a.row === b.row;
+}
+function fmtZone(z) {
+  return z === null ? 'null' : `col:${z.col},row:${z.row}`;
+}
+
+runBtn.addEventListener('click', async () => {
+  runBtn.disabled = true;
+  runBtn.textContent = 'กำลังตรวจสอบ...';
+  banner.className = 'banner';
+  banner.textContent = '';
+  errorBox.textContent = '';
+  tbody.innerHTML = '';
+  tableWrap.style.display = 'none';
+
+  try {
+    const model = await GazeModel.load('./gaze-model.json');
+    const res = await fetch('./test-vectors.json');
+    if (!res.ok) throw new Error(`โหลด test-vectors.json ไม่ได้ (${res.status})`);
+    const data = await res.json();
+    const frames = data.frames;
+
+    let passCount = 0;
+    let failCount = 0;
+
+    // IMPORTANT: one shared model instance, called in order — normalization
+    // is stateful, so replaying frames out of order or on fresh instances
+    // would not reproduce the expected values.
+    frames.forEach((frame, i) => {
+      const actual = model.predictRaw(frame.landmarks, frame.blendshapes);
+      const expected = frame.expected;
+      let frameOk = true;
+
+      ['x', 'y', 'confidence'].forEach((field) => {
+        const expVal = expected[field];
+        const actVal = actual[field];
+        let diff;
+        if (expVal === null || actVal === null) {
+          diff = expVal === actVal ? 0 : Infinity;
+        } else {
+          diff = Math.abs(expVal - actVal);
+        }
+        const ok = diff <= TOLERANCE;
+        frameOk = frameOk && ok;
+
+        const tr = document.createElement('tr');
+        tr.className = ok ? 'ok' : 'bad';
+        tr.innerHTML = `
+          <td>${i}</td>
+          <td>${field}</td>
+          <td>${expVal === null ? 'null' : expVal.toFixed(6)}</td>
+          <td>${actVal === null ? 'null' : actVal.toFixed(6)}</td>
+          <td>${diff === Infinity ? '-' : diff.toFixed(6)}</td>
+          <td class="status">${ok ? 'ตรง ✓' : 'ไม่ตรง ✗'}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+
+      const zoneOk = sameZone(expected.zone, actual.zone);
+      frameOk = frameOk && zoneOk;
+      const zoneTr = document.createElement('tr');
+      zoneTr.className = zoneOk ? 'ok' : 'bad';
+      zoneTr.innerHTML = `
+        <td>${i}</td>
+        <td>zone</td>
+        <td>${fmtZone(expected.zone)}</td>
+        <td>${fmtZone(actual.zone)}</td>
+        <td>exact</td>
+        <td class="status">${zoneOk ? 'ตรง ✓' : 'ไม่ตรง ✗'}</td>
+      `;
+      tbody.appendChild(zoneTr);
+
+      if (frameOk) passCount++; else failCount++;
+    });
+
+    tableWrap.style.display = 'block';
+
+    if (failCount === 0) {
+      banner.className = 'banner pass';
+      banner.textContent = `ต่อถูกแล้ว ✓  (${passCount}/${frames.length} เฟรมตรงทั้งหมด)`;
+    } else {
+      banner.className = 'banner fail';
+      banner.textContent = `ต่อผิด ✗  (${failCount}/${frames.length} เฟรมไม่ตรง) — ดูตารางด้านล่างว่าต่างกันตรงไหน`;
+    }
+  } catch (err) {
+    console.error(err);
+    banner.className = 'banner fail';
+    banner.textContent = 'เกิดข้อผิดพลาดระหว่างตรวจสอบ';
+    errorBox.textContent = String(err && err.stack ? err.stack : err) +
+      '\n\nเช็คว่า: 1) เปิดผ่าน local server ไม่ใช่ file:// ตรงๆ  2) ไฟล์ gaze-model.js, gaze-model.json, test-vectors.json อยู่โฟลเดอร์เดียวกับหน้านี้';
+  } finally {
+    runBtn.disabled = false;
+    runBtn.textContent = 'รันตรวจสอบอีกครั้ง';
+  }
+});
+</script>
+</body>
+</html>
