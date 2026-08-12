@@ -223,6 +223,17 @@
     border: 1px solid var(--line); border-radius: 10px; overflow: hidden; display: none;
   }
   #cam video { width: 100%; display: block; transform: scaleX(-1); }
+  #diag {
+    position: fixed; z-index: 12; top: 70px; right: 18px; width: 250px;
+    background: rgba(16,18,42,.93); border: 1px solid var(--line); border-radius: 10px;
+    padding: 12px 14px; font-family: var(--font-num); font-size: 11px; line-height: 1.8;
+    color: var(--paper); pointer-events: none;
+  }
+  #diag .k { color: var(--muted); }
+  #diag .row2 { display: flex; justify-content: space-between; gap: 10px; }
+  #diag .warn { color: var(--bad); }
+  #diag .ok { color: var(--good); }
+  #diag hr { border: none; border-top: 1px solid var(--line); margin: 8px 0; }
   .hidden { display: none !important; }
 
   @media (max-width: 720px) {
@@ -276,6 +287,8 @@
 </div>
 
 <div id="banner"></div>
+
+<div id="diag" class="hidden"></div>
 
 <div id="cam"><video id="video" playsinline muted></video></div>
 
@@ -334,13 +347,19 @@ const FACE_TASK = "https://storage.googleapis.com/mediapipe-models/face_landmark
    the model's error or the game becomes luck.
    ===================================================================== */
 const CFG = {
-  warmupMs:        15000,  // README: first 10-20s are the least accurate
+  warmupMs:        20000,  // README: ~385px error at 5s, 271px at 20s
   minConfidence:   0.4,    // below this the frame is unusable, not "off target"
   /* Capture requires looking AT the dot, not merely into its zone. The
      radii below are the capture field, sized just above the model's real
      error (161px x / 216px y) so an honest look still registers. Anything
      tighter than this is not measurable with this model. */
-  requireDirectLook: true,
+  /* OFF by default. The delivered model's README is explicit that `zone`
+     (3 cols x 2 rows) is the finest thing it resolves and that UI should
+     not be designed below it. With this on, capture needs the gaze inside
+     the ellipse around the dot — truer to "look AT it", but at 161/216px
+     error it will reject looks that were honest. Turn it on only if
+     playtesting on the demo machine shows it holding up. */
+  requireDirectLook: false,
   tolXFrac:        0.115,  // ~220px on a 1920 screen
   tolYFrac:        0.26,   // ~280px on a 1080 screen
   /* Grace band: the ring outside the capture field where the hold freezes
@@ -348,8 +367,8 @@ const CFG = {
      still settling, and tightens each level until the only forgiving thing
      left is the capture field itself. */
   graceBand:       1.40,   // multiplier at level 1
-  graceBandStep:   0.05,   // removed per level
-  graceBandMin:    1.05,   // never fully disappears — model jitter is real
+  graceBandStep:   0.035,  // removed per level
+  graceBandMin:    1.15,   // never fully disappears — model jitter is real
   dwellMs:         1200,   // hold to capture at level 1
   dwellFloorMs:    900,    // never ask for a shorter hold than this
   dwellStepMs:     50,     // shaved per level
@@ -414,7 +433,7 @@ const $ = (id) => document.getElementById(id);
 const elZones = $("zones"), elDot = $("dot"), elRing = $("hold-ring"), elCore = $("dot-core");
 const elGaze = $("gaze"), elHud = $("hud"), elMeterWrap = $("meter-wrap"), elMeter = $("meter-fill");
 const elMeterLabel = $("meter-label"), elBanner = $("banner"), elCam = $("cam"), video = $("video");
-const elField = $("field-ring"), elGrace = $("grace-ring");
+const elField = $("field-ring"), elGrace = $("grace-ring"), elDiag = $("diag");
 
 const cells = [];
 for (let r = 0; r < ZONE_ROWS; r++) {
@@ -439,6 +458,7 @@ function resetSession() {
   S.onTargetFrames = 0; S.nearFrames = 0; S.validFrames = 0; S.totalFrames = 0;
   S.resisted = 0; S.followed = 0; S.levelsCleared = 0;
   S.warmupLeft = mouseMode ? 0 : CFG.warmupMs;
+  S.lastFrameT = -1; S.lastPred = null;
   S.decoys = []; S.nextDecoyAt = 0; S.decoyGaze = new Map();
   S.dot = { x: 0, y: 0, fromX: 0, fromY: 0, toX: 0, toY: 0, travel: 0, travelMs: 0,
             col: 1, row: 0, dir: Math.random() * Math.PI * 2, speed: 0, boost: 0,
@@ -446,6 +466,31 @@ function resetSession() {
 }
 
 /* ---------- geometry ---------- */
+
+/* THE MAPPING BUG THIS FIXES:
+   the model returns 0-1 of the whole SCREEN, but the game lives in a
+   browser viewport that is usually smaller and offset. Multiplying by
+   innerWidth/innerHeight squashes the full screen range into the window,
+   so every prediction is compressed toward the middle and shifted by the
+   window's position — which reads exactly like "it doesn't follow me".
+   Converting through screen coordinates removes both errors. */
+function screenToViewport(px, py) {
+  const sw = window.screen?.width || W();
+  const sh = window.screen?.height || H();
+  // Viewport origin in screen coordinates. outerHeight-innerHeight is the
+  // browser chrome above the page.
+  const offX = window.screenX ?? 0;
+  const offY = (window.screenY ?? 0) + Math.max(0, window.outerHeight - window.innerHeight);
+  return { x: px * sw - offX, y: py * sh - offY };
+}
+
+/* How much of the screen the window actually covers. Below ~85% the
+   mapping above is still doing real work and fullscreen is worth asking
+   for, because gaze that lands outside the window is simply unreachable. */
+function viewportCoverage() {
+  const sw = window.screen?.width || W(), sh = window.screen?.height || H();
+  return (W() * H()) / (sw * sh);
+}
 const W = () => window.innerWidth;
 const H = () => window.innerHeight;
 const tolX = () => Math.max(150, W() * CFG.tolXFrac);
@@ -799,13 +844,21 @@ function tick(now) {
   let gp = null;
   if (mouseMode) {
     if (mousePt) gp = { x: mousePt.x, y: mousePt.y, confidence: 1, zone: zoneOf(mousePt.x, mousePt.y) };
-  } else if (faceLandmarker && video.readyState >= 2) {
-    const res = faceLandmarker.detectForVideo(video, now);
-    const lm = res.faceLandmarks?.[0];
-    const bs = res.faceBlendshapes?.[0]?.categories;
-    if (lm) {
-      const p = gazeModel.predict(lm, bs);
-      if (p.x !== null) gp = { x: p.x * W(), y: p.y * H(), confidence: p.confidence, zone: p.zone };
+  } else if (faceLandmarker && video.readyState >= 2 && video.videoWidth > 0) {
+    // Only feed genuinely new camera frames. The camera runs ~30fps while
+    // rAF runs at 60-120, and re-predicting the same frame both halves the
+    // smoothing dt and double-counts that pose in the model's running mean.
+    if (video.currentTime !== S.lastFrameT) {
+      S.lastFrameT = video.currentTime;
+      const res = faceLandmarker.detectForVideo(video, now);
+      const lm = res.faceLandmarks?.[0];
+      const bs = res.faceBlendshapes?.[0]?.categories;
+      S.lastPred = lm ? gazeModel.predict(lm, bs) : null;
+    }
+    const p = S.lastPred;
+    if (p && p.x !== null) {
+      const pt = screenToViewport(p.x, p.y);
+      gp = { x: pt.x, y: pt.y, confidence: p.confidence, zone: p.zone, raw: p };
     }
   }
 
@@ -872,6 +925,7 @@ function tick(now) {
   elGrace.style.left = S.dot.x + "px";
   elGrace.style.top = S.dot.y + "px";
   elGrace.className = state === "near" ? "state-near" : "";
+  drawDiag(gp, usable ? state : "no signal");
 
   const need = dwellMs();
   elRing.style.strokeDashoffset = String(289 * (1 - Math.min(1, S.hold / need)));
@@ -923,6 +977,27 @@ function tick(now) {
   if (now > bannerUntil) elBanner.textContent = "";
   drawHud();
   requestAnimationFrame(tick);
+}
+
+let diagOn = false;
+function drawDiag(gp, state) {
+  if (!diagOn) return;
+  const cov = Math.round(viewportCoverage() * 100);
+  const raw = gp?.raw;
+  const conf = raw ? raw.confidence : 0;
+  const row = (k, v, cls = "") => `<div class="row2"><span class="k">${k}</span><span class="${cls}">${v}</span></div>`;
+  elDiag.innerHTML =
+    row("confidence", conf.toFixed(2), conf >= CFG.minConfidence ? "ok" : "warn") +
+    row("model x,y (0-1)", raw ? `${raw.x.toFixed(2)}, ${raw.y.toFixed(2)}` : "—") +
+    row("zone", raw?.zone ? `c${raw.zone.col} r${raw.zone.row}` : "—") +
+    row("dot zone", `c${S.dot.col} r${S.dot.row}`) +
+    row("state", state, state === "on" ? "ok" : state === "off" ? "warn" : "") +
+    "<hr>" +
+    row("usable frames", S.totalFrames ? Math.round((S.validFrames / S.totalFrames) * 100) + "%" : "—") +
+    row("window / screen", cov + "%", cov < 85 ? "warn" : "ok") +
+    row("field radii", `${Math.round(tolX())} x ${Math.round(tolY())}`) +
+    row("model error", "161 x 216") +
+    row("warm-up left", Math.max(0, Math.ceil(S.warmupLeft / 1000)) + "s");
 }
 
 function drawHud() {
@@ -1104,6 +1179,12 @@ window.addEventListener("error", (e) => {
   if (err) err.textContent = "เกิดข้อผิดพลาดในสคริปต์: " + (e.message || "");
 });
 
+window.addEventListener("keydown", (e) => {
+  if (e.key === "d" || e.key === "D") {
+    diagOn = !diagOn;
+    elDiag.classList.toggle("hidden", !diagOn);
+  }
+});
 window.addEventListener("mousemove", (e) => { mousePt = { x: e.clientX, y: e.clientY }; });
 window.addEventListener("resize", () => { if (running) moveDotToNewZone(true); });
 $("btn-camera").addEventListener("click", startCamera);
