@@ -66,6 +66,17 @@
     content: ""; position: absolute; left: 2px; top: 10px;
     width: 7px; height: 7px; border-radius: 50%; background: var(--target);
   }
+  .modes { display: flex; gap: 10px; margin: 0 0 20px; }
+  .mode-btn {
+    flex: 1; text-align: left; padding: 14px 16px; border-radius: 12px;
+    border: 1px solid var(--line); background: var(--ink);
+    cursor: pointer; font-family: inherit; color: var(--paper);
+    transition: border-color 120ms, background 120ms;
+  }
+  .mode-btn:hover { border-color: var(--muted); }
+  .mode-btn[aria-pressed="true"] { border-color: var(--target); background: rgba(242,179,61,.08); }
+  .mode-btn .t { display: block; font-size: 15px; font-weight: 600; margin-bottom: 3px; }
+  .mode-btn .d { display: block; font-size: 12px; color: var(--muted); line-height: 1.5; }
   .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
   .note { font-size: 13px; color: var(--muted); line-height: 1.6; }
   .error { color: var(--bad); font-size: 13px; margin-top: 14px; white-space: pre-wrap; }
@@ -305,6 +316,16 @@
       <li>ระดับ 3 ขึ้นไปจะมีสิ่งรบกวน<b>สีชมพู</b>โผล่มา เปลี่ยนรูปทรงไปเรื่อย ๆ (วงกลม สี่เหลี่ยม สามเหลี่ยม ฯลฯ) — ห้ามมอง ปล่อยให้หายไปเอง</li>
       <li>มาตรวัดด้านล่างหมด = จบรอบ</li>
     </ul>
+    <div class="modes">
+      <button class="mode-btn" id="mode-easy" aria-pressed="false">
+        <span class="t">ง่าย — 3 ช่อง</span>
+        <span class="d">แบ่งซ้าย/กลาง/ขวาเท่านั้น ไม่ต้องแยกบน-ล่าง แม่นกว่ามาก</span>
+      </button>
+      <button class="mode-btn" id="mode-standard" aria-pressed="true">
+        <span class="t">ปกติ — 6 ช่อง</span>
+        <span class="d">แบ่ง 3x2 มีแนวตั้งด้วย ท้าทายกว่าแต่หลุดง่ายกว่า</span>
+      </button>
+    </div>
     <div class="row">
       <button class="primary" id="btn-camera">เริ่มด้วยกล้อง</button>
       <button id="btn-mouse">ทดสอบด้วยเมาส์</button>
@@ -426,7 +447,16 @@ const PTS = {
   levelClear:   150,
 };
 
-const ZONE_COLS = 3, ZONE_ROWS = 2;
+/* Grid shape depends on difficulty. Measured nearest-target accuracy on
+   this model: 3 horizontal targets 88.7-91.5%, but the 3x2 six-target
+   layout only 61-63% — the vertical axis is what collapses. Easy mode
+   therefore drops rows entirely rather than just making things bigger. */
+const MODES = {
+  easy:     { cols: 3, rows: 1, label: "ง่าย" },
+  standard: { cols: 3, rows: 2, label: "ปกติ" },
+};
+let MODE = MODES.standard;
+let ZONE_COLS = 3, ZONE_ROWS = 2;
 
 /* ---------- element refs ---------- */
 const $ = (id) => document.getElementById(id);
@@ -435,15 +465,22 @@ const elGaze = $("gaze"), elHud = $("hud"), elMeterWrap = $("meter-wrap"), elMet
 const elMeterLabel = $("meter-label"), elBanner = $("banner"), elCam = $("cam"), video = $("video");
 const elField = $("field-ring"), elGrace = $("grace-ring"), elDiag = $("diag");
 
-const cells = [];
-for (let r = 0; r < ZONE_ROWS; r++) {
-  for (let c = 0; c < ZONE_COLS; c++) {
+let cells = [];
+function buildGrid(mode) {
+  MODE = mode;
+  ZONE_COLS = mode.cols; ZONE_ROWS = mode.rows;
+  elZones.innerHTML = "";
+  elZones.style.gridTemplateColumns = `repeat(${ZONE_COLS}, 1fr)`;
+  elZones.style.gridTemplateRows = `repeat(${ZONE_ROWS}, 1fr)`;
+  cells = [];
+  for (let i = 0; i < ZONE_COLS * ZONE_ROWS; i++) {
     const d = document.createElement("div");
     d.className = "cell";
     elZones.appendChild(d);
     cells.push(d);
   }
 }
+buildGrid(MODES.standard);
 const cellAt = (col, row) => cells[row * ZONE_COLS + col];
 
 /* ---------- session state ---------- */
@@ -494,9 +531,15 @@ function viewportCoverage() {
 const W = () => window.innerWidth;
 const H = () => window.innerHeight;
 const tolX = () => Math.max(150, W() * CFG.tolXFrac);
-const tolY = () => Math.max(180, H() * CFG.tolYFrac);
+/* Easy mode makes the capture field tall enough to span the play band,
+   so vertical error — the axis this model is weakest on — can't cost the
+   player a capture. Horizontal stays as tight as it was. */
+const tolY = () => (MODE.rows === 1 ? H() * 0.55 : Math.max(180, H() * CFG.tolYFrac));
 const graceBandNow = () =>
   Math.max(CFG.graceBandMin, CFG.graceBand - (S.level - 1) * CFG.graceBandStep);
+/* Easy mode delays every escalation and never reaches the chaotic moods:
+   the point is a mode that stays readable, not a slower version of hard. */
+const lv = (n) => (MODE.rows === 1 ? n + 3 : n);
 const dwellMs = () => Math.max(CFG.dwellFloorMs, CFG.dwellMs - (S.level - 1) * CFG.dwellStepMs);
 const travelMs = () => Math.max(CFG.travelMsFloor, CFG.travelMsBase - (S.level - 1) * 80);
 
@@ -544,20 +587,35 @@ function moveDotToNewZone(instant = false) {
 
 /* ---------- movement ---------- */
 const movePhase = () =>
-  S.level >= CFG.roamFromLevel ? "roam" : S.level >= CFG.driftFromLevel ? "drift" : "jump";
+  S.level >= lv(CFG.roamFromLevel) ? "roam" : S.level >= lv(CFG.driftFromLevel) ? "drift" : "jump";
 const driftSpeed = () =>
-  Math.min(CFG.driftSpeedMax, CFG.driftSpeed + (S.level - CFG.driftFromLevel) * CFG.driftSpeedStep);
+  Math.min(MODE.rows === 1 ? 120 : CFG.driftSpeedMax, CFG.driftSpeed + (S.level - lv(CFG.driftFromLevel)) * CFG.driftSpeedStep);
 const turnRate = () =>
-  Math.min(CFG.turnRateMax, CFG.turnRate + (S.level - CFG.driftFromLevel) * CFG.turnRateStep);
+  Math.min(MODE.rows === 1 ? 0.9 : CFG.turnRateMax, CFG.turnRate + (S.level - lv(CFG.driftFromLevel)) * CFG.turnRateStep);
 
 /* Bounds the dot is allowed to wander in: its own zone while drifting,
    the whole screen (minus padding) once it roams. */
 function bounds() {
   const pad = Math.min(CFG.edgePad, W() * 0.2, H() * 0.2);
   if (movePhase() === "roam") {
-    return { x0: pad, y0: pad, x1: Math.max(pad, W() - pad), y1: Math.max(pad, H() - pad) };
+    const band = MODE.rows === 1 ? H() * 0.16 : null;
+    return {
+      x0: pad, x1: Math.max(pad, W() - pad),
+      y0: band ? H() / 2 - band : pad,
+      y1: band ? H() / 2 + band : Math.max(pad, H() - pad),
+    };
   }
   const cw = W() / ZONE_COLS, ch = H() / ZONE_ROWS;
+  if (MODE.rows === 1) {
+    // Confine vertical travel to a central band: the dot still moves, but
+    // never asks the player's eye to resolve an up/down difference.
+    const band = H() * 0.16;
+    return {
+      x0: Math.max(pad, S.dot.col * cw + pad * 0.5),
+      y0: H() / 2 - band, y1: H() / 2 + band,
+      x1: Math.max(pad, Math.min(W() - pad, (S.dot.col + 1) * cw - pad * 0.5)),
+    };
+  }
   const x0 = Math.max(pad, S.dot.col * cw + pad * 0.5);
   const y0 = Math.max(pad, S.dot.row * ch + pad * 0.5);
   return {
@@ -634,7 +692,7 @@ function updateDotMotion(dt) {
   if (movePhase() === "jump") return; // levels 1-2: sits still between jumps
 
   const sec = dt / 1000;
-  const chaotic = S.level >= CFG.chaosFromLevel;
+  const chaotic = MODE.rows > 1 && S.level >= CFG.chaosFromLevel;
 
   // Swap moods on a timer the player can't read.
   if (chaotic) {
@@ -707,8 +765,8 @@ function decoyState(px, py, d) {
 
 function zoneOf(px, py) {
   return {
-    col: Math.max(0, Math.min(2, Math.floor((px / W()) * ZONE_COLS))),
-    row: Math.max(0, Math.min(1, Math.floor((py / H()) * ZONE_ROWS))),
+    col: Math.max(0, Math.min(ZONE_COLS - 1, Math.floor((px / W()) * ZONE_COLS))),
+    row: Math.max(0, Math.min(ZONE_ROWS - 1, Math.floor((py / H()) * ZONE_ROWS))),
   };
 }
 
@@ -725,7 +783,7 @@ const DECOY_TYPES = [
 ];
 
 function spawnDecoy() {
-  const pool = DECOY_TYPES.filter((t) => S.level >= t.minLevel);
+  const pool = DECOY_TYPES.filter((t) => S.level >= lv(t.minLevel));
   // Weight the newest unlocked shape a little so a fresh one shows up soon.
   const t = Math.random() < 0.45 ? pool[pool.length - 1] : pool[Math.floor(Math.random() * pool.length)];
 
@@ -778,12 +836,12 @@ function clearDecoys() {
 }
 
 function updateDecoys(dt, gp, onTargetNow) {
-  if (S.level >= CFG.decoyFromLevel) {
+  if (S.level >= lv(CFG.decoyFromLevel)) {
     S.nextDecoyAt -= dt;
-    const maxLive = Math.min(3, 1 + Math.floor((S.level - CFG.decoyFromLevel) / 2));
+    const maxLive = Math.min(MODE.rows === 1 ? 2 : 3, 1 + Math.floor((S.level - lv(CFG.decoyFromLevel)) / 2));
     if (S.nextDecoyAt <= 0 && S.decoys.length < maxLive) {
       spawnDecoy();
-      S.nextDecoyAt = Math.max(2000, CFG.decoyGapMs - (S.level - CFG.decoyFromLevel) * 250);
+      S.nextDecoyAt = Math.max(2000, CFG.decoyGapMs - (S.level - lv(CFG.decoyFromLevel)) * 250);
     }
   }
   for (let i = S.decoys.length - 1; i >= 0; i--) {
@@ -858,7 +916,10 @@ function tick(now) {
     const p = S.lastPred;
     if (p && p.x !== null) {
       const pt = screenToViewport(p.x, p.y);
-      gp = { x: pt.x, y: pt.y, confidence: p.confidence, zone: p.zone, raw: p };
+      // predict() always reports a 3x2 zone. In easy mode only the column
+      // is meaningful, so the row is discarded rather than trusted.
+      const z = p.zone ? { col: p.zone.col, row: MODE.rows === 1 ? 0 : p.zone.row } : null;
+      gp = { x: pt.x, y: pt.y, confidence: p.confidence, zone: z, raw: p };
     }
   }
 
@@ -942,9 +1003,9 @@ function tick(now) {
       S.levelsCleared++;
       S.score += PTS.levelClear;
       let sub = graceBandNow() > CFG.graceBandMin ? "ขอบผ่อนผันแคบลง — ต้องมองตรงขึ้น" : "จุดจะเลื่อนเร็วขึ้น";
-      if (S.level === CFG.decoyFromLevel) sub = "เริ่มมีจุดกวน — อย่ามอง";
-      if (S.level === CFG.driftFromLevel) sub = "จุดเริ่มขยับเองตลอดเวลา";
-      if (S.level === CFG.roamFromLevel) sub = "จุดจะวิ่งอิสระทั้งจอ";
+      if (S.level === lv(CFG.decoyFromLevel)) sub = "เริ่มมีจุดกวน — อย่ามอง";
+      if (S.level === lv(CFG.driftFromLevel)) sub = "จุดเริ่มขยับเองตลอดเวลา";
+      if (S.level === lv(CFG.roamFromLevel)) sub = MODE.rows === 1 ? "จุดจะวิ่งได้ทั้งแนวนอน" : "จุดจะวิ่งอิสระทั้งจอ";
       if (S.level === CFG.chaosFromLevel) sub = "จุดจะเปลี่ยนทิศแบบคาดเดาไม่ได้";
       flash(`ระดับ ${S.level}`, sub, 1400);
     } else {
@@ -991,6 +1052,7 @@ function drawDiag(gp, state) {
     row("model x,y (0-1)", raw ? `${raw.x.toFixed(2)}, ${raw.y.toFixed(2)}` : "—") +
     row("zone", raw?.zone ? `c${raw.zone.col} r${raw.zone.row}` : "—") +
     row("dot zone", `c${S.dot.col} r${S.dot.row}`) +
+    row("grid", `${ZONE_COLS}x${ZONE_ROWS}`) +
     row("state", state, state === "on" ? "ok" : state === "off" ? "warn" : "") +
     "<hr>" +
     row("usable frames", S.totalFrames ? Math.round((S.validFrames / S.totalFrames) * 100) + "%" : "—") +
@@ -1053,6 +1115,7 @@ function endSession() {
   $("r-stats").innerHTML = [
     ["เวลาโฟกัสสะสม", fmtSec(focusSeconds)],
     ["จับจุดได้", `${S.captures} จุด`],
+    ["โหมด", `${MODE.label} (${MODE.cols * MODE.rows} ช่อง)`],
     ["ระดับที่ถึง", String(S.level)],
     ["ความแม่นยำ (เฟรมที่อยู่บนเป้า / เฟรมที่ใช้ได้)", `${Math.round(accuracy * 100)}%`],
     ["ต้านจุดกวนได้", `${S.resisted} ครั้ง`],
@@ -1069,6 +1132,7 @@ function endSession() {
     trackingQuality: +tracking.toFixed(3),
     durationSeconds: Math.round(S.elapsedMs / 1000),
     inputMode: mouseMode ? "mouse" : "gaze",
+    mode: MODE.rows === 1 ? "easy" : "standard",
   };
   // Two ways for the site to pick this up: same-page event, or iframe message.
   window.dispatchEvent(new CustomEvent("focustime:result", { detail: payload }));
@@ -1187,6 +1251,13 @@ window.addEventListener("keydown", (e) => {
 });
 window.addEventListener("mousemove", (e) => { mousePt = { x: e.clientX, y: e.clientY }; });
 window.addEventListener("resize", () => { if (running) moveDotToNewZone(true); });
+function selectMode(mode) {
+  buildGrid(mode);
+  $("mode-easy").setAttribute("aria-pressed", String(mode === MODES.easy));
+  $("mode-standard").setAttribute("aria-pressed", String(mode === MODES.standard));
+}
+$("mode-easy").addEventListener("click", () => selectMode(MODES.easy));
+$("mode-standard").addEventListener("click", () => selectMode(MODES.standard));
 $("btn-camera").addEventListener("click", startCamera);
 $("btn-mouse").addEventListener("click", startMouse);
 $("btn-again").addEventListener("click", () => { if (mouseMode) startMouse(); else beginPlay(); });
